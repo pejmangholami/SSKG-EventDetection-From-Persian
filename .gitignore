@@ -1,0 +1,21 @@
+# caches produced by the pipeline (re-derivable, and large)
+cache/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# pipeline output
+SystemResults/*.xls
+SystemResults/*.tsv
+evaluation/StandardizedResults/
+evaluation/Final_Evaluation_Report.xlsx
+
+# NOTE: KnowledgeGraphs/knowledge_graphs.jsonl is NOT ignored on purpose —
+# it is expensive to rebuild (one LLM call per post) and it is the artefact
+# that makes a run reproducible. Add it to git if its size allows, or ignore
+# it here and publish it as a release asset.
+
+# editors / OS
+.idea/
+.vscode/
+.DS_Store

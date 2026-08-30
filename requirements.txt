@@ -1,0 +1,23 @@
+# SSKG — Python dependencies (Linux / macOS / Windows)
+#   pip install -r requirements.txt
+
+# --- core (always needed) ---------------------------------------------------
+numpy
+scipy
+networkx>=3.0        # Louvain community detection
+pandas
+xlwt                 # writes the .xls result files
+xlrd>=2.0.1          # evaluation reads them back
+openpyxl             # gold standard + evaluation report (.xlsx)
+
+# --- the paper's configuration ---------------------------------------------
+torch                # ParsBERT (subject classifier + phrase embeddings)
+transformers
+scikit-learn         # only for --clustering spectral
+
+# --- knowledge-graph extraction: install the one you use --------------------
+openai               # --kg-backend openai      (default)
+# anthropic          # --kg-backend anthropic
+
+# --- tests ------------------------------------------------------------------
+pytest
