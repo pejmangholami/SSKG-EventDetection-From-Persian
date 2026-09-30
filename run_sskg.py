@@ -79,7 +79,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--clustering", choices=["louvain", "spectral", "hcluster"],
                    default=d.clustering)
     g.add_argument("--thresh-ts", type=float, default=d.thresh_ts,
-                   help="Thresh_ts of Algorithm 4 (label merging)")
+                   help="Thresh_ts of Algorithm 4 (label merging): Euclidean "
+                        "distance between un-normalised title embeddings")
     g.add_argument("--titles-per-event", type=int, default=d.titles_per_event)
     g.add_argument("--min-event-size", type=int, default=d.min_event_size)
 

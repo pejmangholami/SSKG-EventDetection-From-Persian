@@ -127,7 +127,7 @@ Set on the command line (`python run_sskg.py --help`) or in `sskg/config.py`.
 | `--t-e` | `0.20` | §3.2.3 | cosine-distance threshold for merging **edge** phrases (Alg. 3). |
 | `--ts-seconds` | `60` | §3.3 | `TS`, the length of the time slot the NAP and NAF vectors are built on. |
 | `--t-d` | `1.2` | Table 3 | forgetting threshold on the entity score. |
-| `--thresh-ts` | `2.0` | Table 3 | `Thresh_ts`, Alg. 4: cosine distance below which two labels become one event. |
+| `--thresh-ts` | `2.0` | Table 3 | `Thresh_ts`, Alg. 4: **Euclidean** distance between (un-normalised) title embeddings below which two labels become one event. |
 | `--clustering` | `louvain` | Table 2 | `louvain`, `spectral` or `hcluster`. |
 | `--window-hours` | `12` | §4.1 | detection cadence; 12 keeps the windows gold-aligned. |
 | `--forget-every` | `1` | Fig. 1 | run analysis + forgetting every *N* windows ("TimeStep"). |
@@ -135,7 +135,7 @@ Set on the command line (`python run_sskg.py --help`) or in `sskg/config.py`.
 
 Weights rise linearly from **0.1** (oldest interval) to **1.0** (newest), Fig. 6.
 
-Three reading decisions are worth stating explicitly, because the paper leaves
+A few reading decisions are worth stating explicitly, because the paper leaves
 room for interpretation:
 
 * **`nafr` (Eq. 7) is the frequency vector reversed in time**, not its
@@ -146,11 +146,16 @@ room for interpretation:
   implements both (`nafr_mode`), and the reversal is the default.
 * **`Thresh_ts = 2` and `t_d = 1.2`.** The caption of Table 3 and the text of
   §4.3 swap these two values; the best cell of Table 3 (0.6786) sits at
-  `Thresh_ts = 2`, `t_d = 1.2`, so that is the default here. Note that cosine
-  distance never exceeds 2, so `Thresh_ts = 2` merges every label into a single
-  global event — which is consistent with the paper reporting the *best* class
-  entropy (0.3544) and one of the *worst* cluster entropies (1.6846) for SSKG.
-  Lower it (e.g. `--thresh-ts 0.3`) if you want genuinely separate events.
+  `Thresh_ts = 2`, `t_d = 1.2`, so that is the default here.
+* **Algorithm 4 uses the Euclidean distance on un-normalised vectors.** Each
+  subject event is represented by its title embedding: the plain mean of the
+  raw ParsBERT embeddings of the three members of the title triple, with no L2
+  normalisation of the members or of the mean. `Thresh_ts` is compared with the
+  Euclidean distance between these vectors. This is *not* the cosine distance
+  of Algorithm 3 (`t_n`, `t_e`), which stays cosine on normalised vectors. Raw
+  mean-pooled ParsBERT vectors have a norm of roughly 17–20, so Euclidean
+  distances are on a much larger scale than cosine distances; at
+  `Thresh_ts = 2` in practice only (near-)identical titles are merged.
 * **Analysis runs before detection** (Fig. 7): score → forget → cluster, so an
   event is always a cluster of bursty entities.
 * **`Thresh_PS = 0.5` and multi-label subjects.** The Persian-News head was
@@ -176,7 +181,7 @@ second run of the same configuration is dominated by the graph work alone:
 |-------|----------|--------------|
 | Subject scores | `cache/subject_scores_*.npy` | the backend or the post set changes |
 | Knowledge graphs | `KnowledgeGraphs/knowledge_graphs.jsonl` | never — append-only, keyed by post id |
-| Phrase embeddings | `cache/embeddings_*.npy` | the embedding model changes |
+| Phrase embeddings (raw, un-normalised) | `cache/embeddings_*.npy` | the embedding model or the cache format changes |
 
 Other speed work, since the printed algorithms are deliberately naive:
 
@@ -427,7 +432,7 @@ win = floor((t − نیمه‌شبِ روز اول) / window_hours) + 1
 | `--t-e` | `0.20` | §۳٫۲٫۳ | آستانه‌ی فاصله‌ی کسینوسی برای ادغام عبارت **یال** (الگوریتم ۳). |
 | `--ts-seconds` | `60` | §۳٫۳ | همان `TS`، طول اسلات زمانی که بردارهای NAP و NAF روی آن ساخته می‌شوند. |
 | `--t-d` | `1.2` | جدول ۳ | آستانه‌ی فراموشی روی امتیاز موجودیت. |
-| `--thresh-ts` | `2.0` | جدول ۳ | `Thresh_ts` الگوریتم ۴: فاصله‌ی کسینوسی که زیر آن دو برچسب یک رخداد می‌شوند. |
+| `--thresh-ts` | `2.0` | جدول ۳ | `Thresh_ts` الگوریتم ۴: فاصله‌ی **اقلیدسی** بین تعبیه‌های (نرمال‌نشده‌ی) عنوان که زیر آن دو برچسب یک رخداد می‌شوند. |
 | `--clustering` | `louvain` | جدول ۲ | یکی از `louvain`، `spectral`، `hcluster`. |
 | `--window-hours` | `12` | §۴٫۱ | گام تشخیص؛ ۱۲ پنجره‌ها را با استاندارد طلایی هم‌تراز نگه می‌دارد. |
 | `--forget-every` | `1` | شکل ۱ | تحلیل و فراموشی هر *N* پنجره اجرا شود («TimeStep»). |
@@ -436,7 +441,7 @@ win = floor((t − نیمه‌شبِ روز اول) / window_hours) + 1
 وزن‌ها طبق شکل ۶ به‌صورت خطی از **۰٫۱** (قدیمی‌ترین بازه) تا **۱٫۰** (تازه‌ترین)
 افزایش می‌یابند.
 
-سه تصمیمِ تفسیری که لازم است صریح گفته شوند، چون مقاله در آن‌ها جای برداشت
+چند تصمیمِ تفسیری که لازم است صریح گفته شوند، چون مقاله در آن‌ها جای برداشت
 باقی گذاشته است:
 
 * **`nafr` در رابطه‌ی ۷، معکوسِ زمانیِ بردار فراوانی است**، نه معکوس عددی
@@ -447,11 +452,15 @@ win = floor((t − نیمه‌شبِ روز اول) / window_hours) + 1
   پیاده‌سازی شده (`nafr_mode`) و حالت معکوس زمانی پیش‌فرض است.
 * **`Thresh_ts = 2` و `t_d = 1.2`.** کپشن جدول ۳ و متن §۴٫۳ این دو مقدار را
   جابه‌جا گفته‌اند؛ بهترین خانه‌ی جدول ۳ (۰٫۶۷۸۶) روی `Thresh_ts = 2` و
-  `t_d = 1.2` است، پس همین پیش‌فرض گرفته شده. توجه کنید فاصله‌ی کسینوسی هرگز از
-  ۲ بیشتر نمی‌شود، پس `Thresh_ts = 2` یعنی همه‌ی برچسب‌ها در یک رخداد سراسری
-  ادغام می‌شوند — که دقیقاً با بهترین class entropy مقاله (۰٫۳۵۴۴) و یکی از
-  بدترین cluster entropyها (۱٫۶۸۴۶) برای SSKG سازگار است. اگر رخدادهای واقعاً
-  مجزا می‌خواهید، آن را کم کنید (مثلاً `--thresh-ts 0.3`).
+  `t_d = 1.2` است، پس همین پیش‌فرض گرفته شده.
+* **الگوریتم ۴ از فاصله‌ی اقلیدسی روی بردارهای نرمال‌نشده استفاده می‌کند.** هر
+  رخداد زیرجریان با تعبیه‌ی عنوانش نمایش داده می‌شود: میانگین ساده‌ی تعبیه‌های
+  خام ParsBERT سه عضو تریپل عنوان، بدون نرمال‌سازی L2 روی اعضا یا روی میانگین.
+  `Thresh_ts` با فاصله‌ی اقلیدسی بین همین بردارها مقایسه می‌شود. این با فاصله‌ی
+  کسینوسی الگوریتم ۳ (`t_n` و `t_e`) فرق دارد؛ آن یکی همچنان کسینوسی روی
+  بردارهای نرمال‌شده است. نُرم بردارهای خام ParsBERT (mean-pooling) حدود ۱۷ تا
+  ۲۰ است، پس مقیاس فاصله‌ی اقلیدسی خیلی بزرگ‌تر از فاصله‌ی کسینوسی است؛ با
+  `Thresh_ts = 2` در عمل فقط عنوان‌های (تقریباً) یکسان ادغام می‌شوند.
 * **تحلیل پیش از تشخیص اجرا می‌شود** (شکل ۷): امتیازدهی ← فراموشی ← خوشه‌بندی؛
   پس هر رخداد همیشه خوشه‌ای از موجودیت‌های منفجرشده است.
 * **`Thresh_PS = 0.5` و برچسب چندگانه.** هدِ Persian-News با softmax آموزش دیده،
@@ -477,7 +486,7 @@ win = floor((t − نیمه‌شبِ روز اول) / window_hours) + 1
 |----|------|------------------------------|
 | امتیاز موضوعی | `cache/subject_scores_*.npy` | با تغییر بک‌اند یا مجموعه‌ی پست‌ها |
 | گراف‌های دانش | `KnowledgeGraphs/knowledge_graphs.jsonl` | هرگز — فقط الحاقی، کلید = شناسه‌ی پست |
-| امبدینگ عبارت‌ها | `cache/embeddings_*.npy` | با تغییر مدل امبدینگ |
+| امبدینگ عبارت‌ها (خام، نرمال‌نشده) | `cache/embeddings_*.npy` | با تغییر مدل امبدینگ یا قالب کش |
 
 بهینه‌سازی‌های دیگر (چون الگوریتم‌های چاپ‌شده عمداً ساده نوشته شده‌اند):
 

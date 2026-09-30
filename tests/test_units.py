@@ -11,7 +11,8 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sskg.config import SSKGConfig, SUBJECTS
-from sskg.detection import FinalEventRegistry, SubjectEvent, cluster_graph, detect_events
+from sskg.detection import (FinalEventRegistry, SubjectEvent, cluster_graph,
+                            detect_events, title_embedding)
 from sskg.embeddings import HashingEmbedder, l2_normalise, normalise_phrase
 from sskg.kg_extraction import (HeuristicExtractor, KnowledgeGraphStore,
                                 clean_triples, parse_triples)
@@ -281,10 +282,11 @@ def test_detect_events_produces_titles_and_posts():
 
 
 def test_registry_merges_similar_labels_and_splits_far_ones():
-    v1 = l2_normalise(np.array([1.0, 0.0, 0.0], dtype=np.float32))
-    v2 = l2_normalise(np.array([0.99, 0.14, 0.0], dtype=np.float32))
-    v3 = l2_normalise(np.array([0.0, 0.0, 1.0], dtype=np.float32))
-    reg = FinalEventRegistry(thresh_ts=0.05)
+    # raw (un-normalised) title embeddings, Euclidean distance
+    v1 = np.array([10.0, 0.0, 0.0], dtype=np.float32)
+    v2 = np.array([10.5, 0.5, 0.0], dtype=np.float32)    # |v1 - v2| ~= 0.71
+    v3 = np.array([10.0, 0.0, 3.0], dtype=np.float32)    # |v1 - v3| ~= 3
+    reg = FinalEventRegistry(thresh_ts=2.0)
 
     def ev(vec, name):
         return SubjectEvent("s", 1, [0], [name], {1}, 1.0, vec)
@@ -294,14 +296,37 @@ def test_registry_merges_similar_labels_and_splits_far_ones():
     assert reg.add(ev(v3, "c")) == 2        # far -> a new final event
 
 
-def test_registry_with_paper_threshold_merges_everything():
-    """Thresh_ts = 2 is the paper's best value; cosine distance <= 2 always."""
+def test_registry_uses_euclidean_distance_not_cosine():
+    """Same direction, different length: cosine distance 0, Euclidean 5."""
     reg = FinalEventRegistry(thresh_ts=2.0)
-    rng = np.random.default_rng(0)
-    for _ in range(5):
-        vec = l2_normalise(rng.normal(size=8).astype(np.float32))
-        number = reg.add(SubjectEvent("s", 1, [0], ["t"], {1}, 1.0, vec))
-    assert number == 1 and len(reg.events) == 1
+    a = np.array([1.0, 0.0], dtype=np.float32)
+    b = np.array([6.0, 0.0], dtype=np.float32)
+    assert reg.add(SubjectEvent("s", 1, [0], ["a"], {1}, 1.0, a)) == 1
+    assert reg.add(SubjectEvent("s", 1, [0], ["b"], {1}, 1.0, b)) == 2
+
+
+def test_final_event_vector_is_a_plain_mean_not_normalised():
+    reg = FinalEventRegistry(thresh_ts=10.0)
+    reg.add(SubjectEvent("s", 1, [0], ["a"], {1}, 1.0, np.array([4.0, 0.0], np.float32)))
+    reg.add(SubjectEvent("s", 1, [0], ["b"], {1}, 1.0, np.array([6.0, 0.0], np.float32)))
+    assert np.allclose(reg.events[0].vector, [5.0, 0.0])
+
+
+def test_title_embedding_is_raw_mean_of_the_three_members():
+    emb = HashingEmbedder(dim=64)
+    members = ["پلاسکو", "آتش گرفت", "تهران"]
+    vec = title_embedding(emb, members)
+    assert np.allclose(vec, emb.encode_raw(members).mean(axis=0))
+    assert not np.isclose(np.linalg.norm(vec), 1.0)
+
+
+def test_upsert_path_still_gets_normalised_vectors():
+    """Algorithm 3 (t_n / t_e, cosine) must keep L2-normalised inputs."""
+    emb = HashingEmbedder(dim=64)
+    raw = emb.encode_raw(["پلاسکو", "تهران"])
+    assert np.allclose(np.linalg.norm(emb.encode(["پلاسکو", "تهران"]), axis=1), 1.0)
+    assert np.allclose(emb.encode(["پلاسکو", "تهران"]), l2_normalise(raw))
+    assert not np.allclose(np.linalg.norm(raw, axis=1), 1.0)
 
 
 # ---------------------------------------------------------------------------

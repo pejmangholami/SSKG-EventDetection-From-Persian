@@ -138,11 +138,12 @@ class SSKGConfig:
     clustering: str = "louvain"
     spectral_clusters: int = 8     # only for 'spectral'
     hcluster_distance: float = 0.5  # only for 'hcluster'
-    #: Thresh_ts of Algorithm 4 — cosine DISTANCE below which two subject-level
-    #: labels are merged into the same final event.  The paper's best value is
-    #: 2 (Table 3 + Section 4.3); note that cosine distance <= 2 always, so 2
-    #: merges every label into a single final event.  This is consistent with
-    #: the paper's minimal class entropy (0.3544) and maximal cluster entropy.
+    #: Thresh_ts of Algorithm 4 — EUCLIDEAN distance below which a subject-level
+    #: event joins an existing final event.  The distance is measured between
+    #: title embeddings: the plain mean of the RAW (not L2-normalised) ParsBERT
+    #: embeddings of the three members of the title triple; the mean is not
+    #: normalised either.  (Unlike t_n / t_e above, this is NOT a cosine
+    #: distance.)  The paper's best value is 2 (Table 3 + Section 4.3).
     thresh_ts: float = 2.0
     #: Number of representative titles kept per event.
     titles_per_event: int = 3

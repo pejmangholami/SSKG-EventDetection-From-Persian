@@ -159,7 +159,9 @@ def test_forgetting_keeps_the_graph_small(workspace):
 
 
 def test_thresh_ts_controls_the_number_of_final_events(workspace):
-    merged = run(offline_config(thresh_ts=2.0, out_dir="SR_merged"))
+    # Thresh_ts is a Euclidean distance on un-normalised vectors, so it has no
+    # upper bound: a huge value merges everything, a tiny one splits.
+    merged = run(offline_config(thresh_ts=1e9, out_dir="SR_merged"))
     split = run(offline_config(thresh_ts=0.05, out_dir="SR_split"))
     assert merged.stats["final_events"] == 1
     assert split.stats["final_events"] >= merged.stats["final_events"]

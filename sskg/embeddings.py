@@ -4,8 +4,8 @@ SSKG — phrase embeddings.
 
 Section 3.2.3 of the paper embeds every node phrase and every edge phrase with
 ParsBERT [43] and merges the ones whose cosine distance is small (Algorithm 3).
-The same vectors are reused for the event titles (Section 3.4.1) and for the
-cross-subject label mapping (Algorithm 4).
+The same model embeds the event titles for the cross-subject label mapping
+(Algorithm 4), which uses the Euclidean distance on un-normalised vectors.
 
 Two backends:
 
@@ -23,9 +23,19 @@ posts), so every embedder is wrapped in a two-level cache:
 * an in-memory ``dict``  (phrase -> vector)
 * a disk cache (``cache/embeddings.{npy,json}``) that survives between runs
 
-and all misses are encoded in **batches**.  All returned vectors are L2
-normalised, which turns "cosine distance" into ``1 - dot`` and lets the stream
-graph do nearest-neighbour search with one matrix-vector product.
+and all misses are encoded in **batches**.
+
+Two views of the same cached vectors
+------------------------------------
+The cache stores the **raw** (un-normalised) model output.  Callers pick the
+view they need:
+
+* :meth:`BaseEmbedder.encode` — L2-normalised vectors.  Used by the stream
+  graph (Algorithm 3, ``UpSert``), where "cosine distance" becomes ``1 - dot``
+  and nearest-neighbour search is one matrix-vector product.
+* :meth:`BaseEmbedder.encode_raw` — the raw vectors, never normalised.  Used
+  only by the label mapping of Algorithm 4 (Section 3.4.2), which compares
+  event titles with the **Euclidean** distance.
 """
 
 from __future__ import annotations
@@ -85,14 +95,22 @@ class BaseEmbedder:
         if cache_path:
             self._load_cache()
 
+    #: Stored in the cache metadata.  Caches written before the cache held
+    #: raw vectors (they held L2-normalised ones) have no such key and are
+    #: discarded on load, because raw vectors cannot be recovered from them.
+    CACHE_FORMAT = "raw-v2"
+
     # -- public API ---------------------------------------------------------
-    def encode(self, phrases: Sequence[str]) -> np.ndarray:
-        """Return an (n, dim) float32 matrix of L2-normalised embeddings."""
+    def encode_raw(self, phrases: Sequence[str]) -> np.ndarray:
+        """Return an (n, dim) float32 matrix of RAW (un-normalised) embeddings.
+
+        Used only by the label mapping of Algorithm 4 (Euclidean distance).
+        """
         phrases = [normalise_phrase(p) for p in phrases]
         missing = [p for p in dict.fromkeys(phrases) if p not in self._cache]
         for start in range(0, len(missing), self.batch_size):
             chunk = missing[start:start + self.batch_size]
-            vecs = l2_normalise(self._encode_batch(chunk))
+            vecs = np.asarray(self._encode_batch(chunk), dtype=np.float32)
             with self._lock:
                 for phrase, vec in zip(chunk, vecs):
                     self._cache[phrase] = vec.astype(np.float32)
@@ -100,6 +118,13 @@ class BaseEmbedder:
         if not phrases:
             return np.zeros((0, self.dim), dtype=np.float32)
         return np.stack([self._cache[p] for p in phrases])
+
+    def encode(self, phrases: Sequence[str]) -> np.ndarray:
+        """Return an (n, dim) float32 matrix of L2-normalised embeddings.
+
+        Used by the stream graph (Algorithm 3, cosine distance).
+        """
+        return l2_normalise(self.encode_raw(phrases))
 
     def encode_one(self, phrase: str) -> np.ndarray:
         return self.encode([phrase])[0]
@@ -113,7 +138,9 @@ class BaseEmbedder:
                 mat = np.load(vec_file)
                 with open(key_file, "r", encoding="utf-8") as fh:
                     meta = json.load(fh)
-                if meta.get("model") == self.name and mat.shape[0] == len(meta["keys"]):
+                if (meta.get("model") == self.name
+                        and meta.get("format") == self.CACHE_FORMAT
+                        and mat.shape[0] == len(meta["keys"])):
                     self._cache = {k: mat[i] for i, k in enumerate(meta["keys"])}
             except Exception:                      # a broken cache is not fatal
                 self._cache = {}
@@ -128,7 +155,8 @@ class BaseEmbedder:
         np.save(tmp_npy, mat)
         os.replace(tmp_npy, self._cache_path + ".npy")
         with open(self._cache_path + ".json.tmp", "w", encoding="utf-8") as fh:
-            json.dump({"model": self.name, "keys": keys}, fh, ensure_ascii=False)
+            json.dump({"model": self.name, "format": self.CACHE_FORMAT,
+                       "keys": keys}, fh, ensure_ascii=False)
         os.replace(self._cache_path + ".json.tmp", self._cache_path + ".json")
         self._dirty = False
 

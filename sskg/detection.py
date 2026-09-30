@@ -11,8 +11,12 @@ SSKG — Section 3.4: event detection.
    space; the posts of an event are the posts that contributed its nodes.
 3. **Mapping labels to the main stream** (Section 3.4.2, Algorithm 4).  Events
    found in different subject streams are merged into one global event list
-   when the cosine distance between their label embeddings is below
-   ``Thresh_ts``.
+   when the **Euclidean** distance between their title embeddings is below
+   ``Thresh_ts``.  The title embedding is the plain mean of the (raw, i.e.
+   NOT L2-normalised) embeddings of the three members of the title triple,
+   and it is not normalised either.  This is deliberately different from the
+   stream-graph merging of Algorithm 3, which stays cosine on normalised
+   vectors.
 """
 
 from __future__ import annotations
@@ -39,6 +43,8 @@ class SubjectEvent:
     titles: List[str]                 # triple-level titles (Section 3.4.1)
     post_ids: Set[int]
     score: float
+    #: Title embedding used by Algorithm 4: mean of the RAW embeddings of the
+    #: three members of the title triple (not normalised).
     vector: np.ndarray
     keywords: List[str] = field(default_factory=list)   # entity surface forms
 
@@ -63,6 +69,7 @@ class FinalEvent:
     subjects: Set[str] = field(default_factory=set)
     windows: Set[int] = field(default_factory=set)
     post_ids: Set[int] = field(default_factory=set)
+    #: Running mean of the absorbed title embeddings (raw, not normalised).
     vector: Optional[np.ndarray] = None
     _n: int = 0
 
@@ -73,13 +80,13 @@ class FinalEvent:
         self.subjects.add(ev.subject)
         self.windows.add(ev.window)
         self.post_ids |= ev.post_ids
+        vec = np.asarray(ev.vector, dtype=np.float32)
         if self.vector is None:
-            self.vector = ev.vector.copy()
+            self.vector = vec.copy()
             self._n = 1
         else:
-            self._n += 1
-            self.vector = l2_normalise(
-                self.vector * (self._n - 1) / self._n + ev.vector / self._n)
+            self._n += 1                 # plain running mean, NOT normalised
+            self.vector = self.vector * (self._n - 1) / self._n + vec / self._n
 
 
 # ---------------------------------------------------------------------------
@@ -147,11 +154,16 @@ def cluster_graph(graph: StreamGraph, edge_scores: np.ndarray,
 # titles (Section 3.4.1)
 # ---------------------------------------------------------------------------
 
-def event_titles(graph: StreamGraph, nodes: Sequence[int],
-                 centroid: np.ndarray, max_titles: int = 3) -> List[str]:
-    """The triples of the cluster closest to its label, as title strings."""
+def event_title_triples(graph: StreamGraph, nodes: Sequence[int],
+                        centroid: np.ndarray, max_titles: int = 3
+                        ) -> List[Tuple[str, str, str]]:
+    """The triples of the cluster closest to its label, as (h, r, o) strings.
+
+    The ranking against the cluster centroid is Section 3.4.1 (title choice);
+    it is unrelated to the distance of Algorithm 4.
+    """
     triples = graph.triples_of(nodes)
-    titles: List[str] = []
+    out: List[Tuple[str, str, str]] = []
     if triples:
         node_vecs = graph.nodes.vectors
         edge_vecs = graph.edges.vectors
@@ -160,13 +172,23 @@ def event_titles(graph: StreamGraph, nodes: Sequence[int],
             for (n1, e, n2) in triples
         ])
         order = np.argsort(-(mats @ centroid))
+        seen: Set[str] = set()
         for k in order[:max_titles]:
             n1, e, n2 = triples[int(k)]
-            text = " ".join(x for x in (graph.nodes.title(n1),
-                                        graph.edges.title(e),
-                                        graph.nodes.title(n2)) if x)
-            if text and text not in titles:
-                titles.append(text)
+            members = (graph.nodes.title(n1), graph.edges.title(e),
+                       graph.nodes.title(n2))
+            text = " ".join(x for x in members if x)
+            if text and text not in seen:
+                seen.add(text)
+                out.append(members)
+    return out
+
+
+def event_titles(graph: StreamGraph, nodes: Sequence[int],
+                 centroid: np.ndarray, max_titles: int = 3) -> List[str]:
+    """The triples of the cluster closest to its label, as title strings."""
+    titles = [" ".join(x for x in t if x)
+              for t in event_title_triples(graph, nodes, centroid, max_titles)]
     if not titles:                       # isolated nodes: fall back to titles
         for n in nodes[:max_titles]:
             t = graph.nodes.title(n)
@@ -207,7 +229,14 @@ def detect_events(graph: StreamGraph, node_scores: np.ndarray,
         if len(nodes) < min_event_size:
             continue
         centroid = l2_normalise(node_vecs[nodes].mean(axis=0))
-        titles = event_titles(graph, nodes, centroid, max_titles)
+        title_triples = event_title_triples(graph, nodes, centroid, max_titles)
+        titles = [" ".join(x for x in t if x) for t in title_triples]
+        if title_triples:
+            members = [x for x in title_triples[0] if x]
+        else:                            # isolated nodes: fall back to titles
+            titles = [t for t in (graph.nodes.title(n) for n in nodes[:max_titles]) if t]
+            members = titles
+        vector = title_embedding(graph.embedder, members)
         posts: Set[int] = set()
         for n in nodes:
             posts |= graph.node_posts(n)
@@ -216,7 +245,7 @@ def detect_events(graph: StreamGraph, node_scores: np.ndarray,
         events.append(SubjectEvent(subject=graph.subject, window=window,
                                    nodes=list(nodes), titles=titles,
                                    post_ids=posts, score=score,
-                                   vector=centroid,
+                                   vector=vector,
                                    keywords=node_keywords(graph, nodes, max_titles)))
     events.sort(key=lambda e: -e.score)
     return events
@@ -226,8 +255,31 @@ def detect_events(graph: StreamGraph, node_scores: np.ndarray,
 # Algorithm 4 — map subject labels onto the main stream
 # ---------------------------------------------------------------------------
 
+def title_embedding(embedder, members: Sequence[str]) -> np.ndarray:
+    """Embedding of an event title for Algorithm 4.
+
+    The plain mean of the RAW embeddings of the title's members (the three
+    members of the title triple).  Neither the member vectors nor the mean are
+    L2-normalised: Algorithm 4 uses the Euclidean distance.
+    """
+    members = [m for m in members if m]
+    if not members:
+        return np.zeros(embedder.dim, dtype=np.float32)
+    return embedder.encode_raw(members).mean(axis=0).astype(np.float32)
+
+
+def euclidean_distances(matrix: np.ndarray, vec: np.ndarray) -> np.ndarray:
+    """Euclidean distance between every row of `matrix` and `vec`."""
+    return np.linalg.norm(matrix - vec[None, :], axis=1)
+
+
 class FinalEventRegistry:
-    """Keeps the global event list and merges subject events into it."""
+    """Keeps the global event list and merges subject events into it.
+
+    A subject event joins the nearest final event when the **Euclidean**
+    distance between their (un-normalised) title embeddings is below
+    ``thresh_ts``; otherwise it opens a new final event.
+    """
 
     def __init__(self, thresh_ts: float = 2.0):
         self.thresh_ts = float(thresh_ts)
@@ -243,9 +295,10 @@ class FinalEventRegistry:
     def add(self, ev: SubjectEvent) -> int:
         """Return the final event number (1-based) this subject event maps to."""
         if self._matrix is not None and len(self.events):
-            sims = self._matrix @ ev.vector
-            best = int(np.argmax(sims))
-            distance = 1.0 - float(sims[best])
+            dists = euclidean_distances(self._matrix,
+                                        np.asarray(ev.vector, dtype=np.float32))
+            best = int(np.argmin(dists))
+            distance = float(dists[best])
             if distance < self.thresh_ts:
                 self.events[best].absorb(ev)
                 self._rebuild_matrix()
